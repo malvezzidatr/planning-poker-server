@@ -20,6 +20,7 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
 
   private rooms: Record<string, Record<string, string>> = {};
   private socketUserMap: Record<string, { roomId: string, username: string }> = {};
+  private roomRevealStates: Record<string, boolean> = {};
 
   afterInit(server: Server) {
     console.log('WebSocket Initialized');
@@ -36,33 +37,53 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       if (this.rooms[roomId]) {
         delete this.rooms[roomId][username];
         this.server.to(roomId).emit('roomUpdate', Object.keys(this.rooms[roomId]));
+
+        // 🔥 NOVO: emite votos atualizados
+        this.server.to(roomId).emit('votesUpdate', this.rooms[roomId]);
       }
       delete this.socketUserMap[client.id];
     }
     console.log(`Client disconnected: ${client.id}`);
   }
 
+  @SubscribeMessage('leaveRoom')
+  handleLeaveRoom(client: Socket) {
+    const info = this.socketUserMap[client.id];
+    if (info) {
+      const { roomId, username } = info;
+      if (this.rooms[roomId]) {
+        delete this.rooms[roomId][username];
+        this.server.to(roomId).emit('roomUpdate', Object.keys(this.rooms[roomId]));
+      }
+      delete this.socketUserMap[client.id];
+      client.leave(roomId);
+    }
+  }
+
   @SubscribeMessage('joinRoom')
   handleJoinRoom(client: Socket, { roomId, username }: { roomId: string; username: string }) {
-    // Se o socket já tinha alguém, remova o antigo
-    const oldEntry = this.socketUserMap[client.id];
-    if (oldEntry) {
-      const { roomId: oldRoomId, username: oldUsername } = oldEntry;
-      if (this.rooms[oldRoomId]) {
-        delete this.rooms[oldRoomId][oldUsername];
-        this.server.to(oldRoomId).emit('roomUpdate', Object.keys(this.rooms[oldRoomId]));
+    for (const [socketId, info] of Object.entries(this.socketUserMap)) {
+      if (info.username === username && info.roomId === roomId) {
+        delete this.socketUserMap[socketId];
       }
     }
 
     client.join(roomId);
     if (!this.rooms[roomId]) {
       this.rooms[roomId] = {};
+      this.roomRevealStates[roomId] = false;
     }
 
     this.rooms[roomId][username] = '';
     this.socketUserMap[client.id] = { roomId, username };
 
     this.server.to(roomId).emit('roomUpdate', Object.keys(this.rooms[roomId]));
+
+    client.emit('votesUpdate', this.rooms[roomId]);
+    client.emit('roomState', {
+      revealed: this.roomRevealStates[roomId] || false,
+      votes: this.rooms[roomId],
+    });
   }
 
   @SubscribeMessage('vote')
@@ -71,6 +92,9 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     if (!this.rooms[roomId]) return;
 
     this.rooms[roomId][username] = card;
+
+    // Emite para atualizar todos os clientes
+    this.server.to(roomId).emit('votesUpdate', this.rooms[roomId]);
     this.server.to(roomId).emit('userVoted', username);
   }
 
@@ -81,6 +105,8 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     for (const user in this.rooms[roomId]) {
       this.rooms[roomId][user] = '';
     }
+
+    this.roomRevealStates[roomId] = false;
     this.server.to(roomId).emit('resetVotes');
   }
 
@@ -88,6 +114,7 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
   handleReveal(client: Socket, roomId: string) {
     const roomVotes = this.rooms[roomId];
     if (roomVotes) {
+      this.roomRevealStates[roomId] = true; // 👈 setar como revelado
       this.server.to(roomId).emit('revealVotes', roomVotes);
     }
   }
