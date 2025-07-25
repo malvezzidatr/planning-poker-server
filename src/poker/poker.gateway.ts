@@ -14,12 +14,20 @@ interface VotePayload {
   card: string;
 }
 
+type Role = 'player' | 'spectator';
+
+interface UserInfo {
+  vote: string;
+  role: Role;
+}
+
 @WebSocketGateway({ cors: true })
 export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
 
-  private rooms: Record<string, Record<string, string>> = {};
-  private socketUserMap: Record<string, { roomId: string, username: string }> = {};
+  // rooms: roomId -> username -> { vote, role }
+  private rooms: Record<string, Record<string, UserInfo>> = {};
+  private socketUserMap: Record<string, { roomId: string; username: string }> = {};
   private roomRevealStates: Record<string, boolean> = {};
 
   afterInit(server: Server) {
@@ -36,10 +44,8 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       const { roomId, username } = info;
       if (this.rooms[roomId]) {
         delete this.rooms[roomId][username];
-        this.server.to(roomId).emit('roomUpdate', Object.keys(this.rooms[roomId]));
-
-        // 🔥 NOVO: emite votos atualizados
-        this.server.to(roomId).emit('votesUpdate', this.rooms[roomId]);
+        this.server.to(roomId).emit('roomUpdate', this.formatRoomUsers(roomId));
+        this.server.to(roomId).emit('votesUpdate', this.formatVotes(roomId));
       }
       delete this.socketUserMap[client.id];
     }
@@ -53,7 +59,8 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       const { roomId, username } = info;
       if (this.rooms[roomId]) {
         delete this.rooms[roomId][username];
-        this.server.to(roomId).emit('roomUpdate', Object.keys(this.rooms[roomId]));
+        this.server.to(roomId).emit('roomUpdate', this.formatRoomUsers(roomId));
+        this.server.to(roomId).emit('votesUpdate', this.formatVotes(roomId));
       }
       delete this.socketUserMap[client.id];
       client.leave(roomId);
@@ -61,7 +68,11 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
   }
 
   @SubscribeMessage('joinRoom')
-  handleJoinRoom(client: Socket, { roomId, username }: { roomId: string; username: string }) {
+  handleJoinRoom(
+    client: Socket,
+    { roomId, username, role }: { roomId: string; username: string; role: Role },
+  ) {
+    // Remove conexões anteriores do mesmo usuário na mesma sala
     for (const [socketId, info] of Object.entries(this.socketUserMap)) {
       if (info.username === username && info.roomId === roomId) {
         delete this.socketUserMap[socketId];
@@ -74,15 +85,15 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       this.roomRevealStates[roomId] = false;
     }
 
-    this.rooms[roomId][username] = '';
+    this.rooms[roomId][username] = { vote: '', role };
     this.socketUserMap[client.id] = { roomId, username };
 
-    this.server.to(roomId).emit('roomUpdate', Object.keys(this.rooms[roomId]));
+    this.server.to(roomId).emit('roomUpdate', this.formatRoomUsers(roomId));
 
-    client.emit('votesUpdate', this.rooms[roomId]);
+    client.emit('votesUpdate', this.formatVotes(roomId));
     client.emit('roomState', {
       revealed: this.roomRevealStates[roomId] || false,
-      votes: this.rooms[roomId],
+      votes: this.formatVotes(roomId),
     });
   }
 
@@ -91,10 +102,11 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     const { roomId, username, card } = payload;
     if (!this.rooms[roomId]) return;
 
-    this.rooms[roomId][username] = card;
+    if (this.rooms[roomId][username]) {
+      this.rooms[roomId][username].vote = card;
+    }
 
-    // Emite para atualizar todos os clientes
-    this.server.to(roomId).emit('votesUpdate', this.rooms[roomId]);
+    this.server.to(roomId).emit('votesUpdate', this.formatVotes(roomId));
     this.server.to(roomId).emit('userVoted', username);
   }
 
@@ -103,7 +115,7 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     if (!this.rooms[roomId]) return;
 
     for (const user in this.rooms[roomId]) {
-      this.rooms[roomId][user] = '';
+      this.rooms[roomId][user].vote = '';
     }
 
     this.roomRevealStates[roomId] = false;
@@ -116,12 +128,16 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     if (roomVotes) {
       this.roomRevealStates[roomId] = true;
 
-      const votos = Object.values(roomVotes);
+      // Pega votos apenas dos players (não espectadores)
+      const votos = Object.values(roomVotes)
+        .filter((userInfo) => userInfo.role === 'player')
+        .map((userInfo) => userInfo.vote);
+
       const media = this.calcularMedia(votos);
       const maisVotado = this.calcularMaisVotado(votos);
 
       this.server.to(roomId).emit('revealVotes', {
-        votes: roomVotes,
+        votes: this.formatVotes(roomId),
         average: media,
         mostVoted: maisVotado,
       });
@@ -143,17 +159,34 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       return;
     }
 
-    const currentVote = this.rooms[roomId][oldUsername];
+    const currentUserInfo = this.rooms[roomId][oldUsername];
     delete this.rooms[roomId][oldUsername];
-    this.rooms[roomId][newUsername] = currentVote;
+    this.rooms[roomId][newUsername] = currentUserInfo;
 
     this.socketUserMap[client.id].username = newUsername;
 
-    this.server.to(roomId).emit('roomUpdate', Object.keys(this.rooms[roomId]));
+    this.server.to(roomId).emit('roomUpdate', this.formatRoomUsers(roomId));
+  }
+
+  private formatRoomUsers(roomId: string) {
+    if (!this.rooms[roomId]) return [];
+    return Object.entries(this.rooms[roomId]).map(([username, info]) => ({
+      username,
+      role: info.role,
+    }));
+  }
+
+  private formatVotes(roomId: string) {
+    if (!this.rooms[roomId]) return {};
+    const votes: Record<string, string> = {};
+    for (const [username, info] of Object.entries(this.rooms[roomId])) {
+      votes[username] = info.vote;
+    }
+    return votes;
   }
 
   calcularMedia(votos: string[]): number {
-    const valoresNumericos = votos.map(v => Number(v)).filter(v => !isNaN(v));
+    const valoresNumericos = votos.map((v) => Number(v)).filter((v) => !isNaN(v) && v !== 0);
     if (valoresNumericos.length === 0) return 0;
     const soma = valoresNumericos.reduce((acc, v) => acc + v, 0);
     return soma / valoresNumericos.length;
@@ -161,12 +194,13 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
 
   calcularMaisVotado(votos: string[]): string {
     const contagem: Record<string, number> = {};
-    votos.forEach(v => {
-      contagem[v] = (contagem[v] || 0) + 1;
+    votos.forEach((v) => {
+      if (v) contagem[v] = (contagem[v] || 0) + 1;
     });
 
-    const maisVotado = Object.entries(contagem).reduce((a, b) => b[1] > a[1] ? b : a);
+    if (Object.keys(contagem).length === 0) return '';
+
+    const maisVotado = Object.entries(contagem).reduce((a, b) => (b[1] > a[1] ? b : a));
     return maisVotado[0];
   }
-
 }
