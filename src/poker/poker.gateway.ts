@@ -114,8 +114,17 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
   handleReveal(client: Socket, roomId: string) {
     const roomVotes = this.rooms[roomId];
     if (roomVotes) {
-      this.roomRevealStates[roomId] = true; // 👈 setar como revelado
-      this.server.to(roomId).emit('revealVotes', roomVotes);
+      this.roomRevealStates[roomId] = true;
+
+      const votos = Object.values(roomVotes);
+      const media = this.calcularMedia(votos);
+      const maisVotado = this.calcularMaisVotado(votos);
+
+      this.server.to(roomId).emit('revealVotes', {
+        votes: roomVotes,
+        average: media,
+        mostVoted: maisVotado,
+      });
     }
   }
 
@@ -142,4 +151,22 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
 
     this.server.to(roomId).emit('roomUpdate', Object.keys(this.rooms[roomId]));
   }
+
+  calcularMedia(votos: string[]): number {
+    const valoresNumericos = votos.map(v => Number(v)).filter(v => !isNaN(v));
+    if (valoresNumericos.length === 0) return 0;
+    const soma = valoresNumericos.reduce((acc, v) => acc + v, 0);
+    return soma / valoresNumericos.length;
+  }
+
+  calcularMaisVotado(votos: string[]): string {
+    const contagem: Record<string, number> = {};
+    votos.forEach(v => {
+      contagem[v] = (contagem[v] || 0) + 1;
+    });
+
+    const maisVotado = Object.entries(contagem).reduce((a, b) => b[1] > a[1] ? b : a);
+    return maisVotado[0];
+  }
+
 }
