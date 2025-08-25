@@ -150,6 +150,21 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     }
   }
 
+  @SubscribeMessage('changeUserRole')
+  handleChangeUserRole(
+    client: Socket,
+    payload: { roomId: string, username: string }
+  ) {
+    const { roomId, username } = payload;
+    
+    const currentUserInfo = this.rooms[roomId][username];
+    currentUserInfo.role = currentUserInfo.role === 'player' ? 'spectator' : 'player';
+    currentUserInfo.vote = "";
+    this.rooms[roomId][username] = currentUserInfo;
+    this.server.to(roomId).emit('roomUpdate', this.formatRoomUsers(roomId));
+    this.server.to(roomId).emit('votesUpdate', this.formatVotes(roomId));
+  }
+
   @SubscribeMessage('changeUsername')
   handleChangeUsername(
     client: Socket,
