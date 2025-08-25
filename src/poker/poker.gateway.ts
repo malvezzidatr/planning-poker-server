@@ -67,27 +67,34 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     }
   }
 
+  @SubscribeMessage('checkIfRoomExists')
+  handleCheckIfRoomsExists(
+    client: Socket,
+    { roomId }: { roomId: string }
+  ) {
+    const exists = !!this.rooms[roomId]
+    console.log(`Client is trying to connect to: ${roomId} ${!exists ? "this rooms doesn't exists" : ""}`);
+    client.emit('checkIfRoomExistsResponse', { exists });
+  }
+
   @SubscribeMessage('joinRoom')
   handleJoinRoom(
     client: Socket,
     { roomId, username, role }: { roomId: string; username: string; role: Role },
   ) {
-    // Remove conexões anteriores do mesmo usuário na mesma sala
     for (const [socketId, info] of Object.entries(this.socketUserMap)) {
       if (info.username === username && info.roomId === roomId) {
         delete this.socketUserMap[socketId];
       }
     }
-
     client.join(roomId);
     if (!this.rooms[roomId]) {
       this.rooms[roomId] = {};
       this.roomRevealStates[roomId] = false;
     }
-
     this.rooms[roomId][username] = { vote: '', role };
     this.socketUserMap[client.id] = { roomId, username };
-
+    
     this.server.to(roomId).emit('roomUpdate', this.formatRoomUsers(roomId));
 
     client.emit('votesUpdate', this.formatVotes(roomId));
@@ -128,7 +135,6 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     if (roomVotes) {
       this.roomRevealStates[roomId] = true;
 
-      // Pega votos apenas dos players (não espectadores)
       const votos = Object.values(roomVotes)
         .filter((userInfo) => userInfo.role === 'player')
         .map((userInfo) => userInfo.vote);
@@ -170,10 +176,11 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
 
   private formatRoomUsers(roomId: string) {
     if (!this.rooms[roomId]) return [];
-    return Object.entries(this.rooms[roomId]).map(([username, info]) => ({
+    const users = Object.entries(this.rooms[roomId]).map(([username, info]) => ({
       username,
       role: info.role,
     }));
+    return users;
   }
 
   private formatVotes(roomId: string) {
