@@ -19,15 +19,15 @@ type Role = 'player' | 'spectator';
 interface UserInfo {
   vote: string;
   role: Role;
+  admin: boolean;
 }
 
 @WebSocketGateway({ cors: true })
 export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
 
-  // rooms: roomId -> username -> { vote, role }
   private rooms: Record<string, Record<string, UserInfo>> = {};
-  private socketUserMap: Record<string, { roomId: string; username: string }> = {};
+  private socketUserMap: Record<string, { roomId: string; username: string, admin: boolean }> = {};
   private roomRevealStates: Record<string, boolean> = {};
 
   afterInit(server: Server) {
@@ -80,7 +80,7 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
   @SubscribeMessage('joinRoom')
   handleJoinRoom(
     client: Socket,
-    { roomId, username, role }: { roomId: string; username: string; role: Role },
+    { roomId, username, role, admin }: { roomId: string; username: string; role: Role, admin: boolean },
   ) {
     for (const [socketId, info] of Object.entries(this.socketUserMap)) {
       if (info.username === username && info.roomId === roomId) {
@@ -92,8 +92,8 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       this.rooms[roomId] = {};
       this.roomRevealStates[roomId] = false;
     }
-    this.rooms[roomId][username] = { vote: '', role };
-    this.socketUserMap[client.id] = { roomId, username };
+    this.rooms[roomId][username] = { vote: '', role, admin };
+    this.socketUserMap[client.id] = { roomId, username, admin };
     
     this.server.to(roomId).emit('roomUpdate', this.formatRoomUsers(roomId));
 
@@ -194,6 +194,7 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
     const users = Object.entries(this.rooms[roomId]).map(([username, info]) => ({
       username,
       role: info.role,
+      admin: info.admin || false,
     }));
     return users;
   }
