@@ -103,7 +103,6 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
         delete this.socketUserMap[socketId];
       }
     }
-    console.log('stories1', stories);
     client.join(roomId);
     if (!this.rooms[roomId]) {
       this.rooms[roomId] = {};
@@ -118,7 +117,6 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       revealed: this.roomRevealStates[roomId] || false,
       votes: this.formatVotes(roomId),
     });
-    console.log('stories2', stories);
     
     if (!this.roomStories[roomId]) {
       this.roomStories[roomId] = stories && stories.length ? stories : [];
@@ -229,7 +227,6 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
   @SubscribeMessage('addUserStories')
   handleAddUserStories(client: Socket, payload: { roomId: string, userStories: string[] }) {
     const { roomId, userStories } = payload;
-    console.log("stories4", userStories);
     this.roomStories[roomId] = userStories;
     this.server.to(roomId).emit('userStoriesUpdate', userStories);
   }
