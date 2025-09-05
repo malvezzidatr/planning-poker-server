@@ -30,6 +30,7 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
   private socketUserMap: Record<string, { roomId: string; username: string, admin: boolean }> = {};
   private roomRevealStates: Record<string, boolean> = {};
   private roomStories: Record<string, string[]> = {};
+  private roomCurrentStory: Record<string, number> = {};
 
   private roomTimers: Record<string, {
     initialDuration: number;
@@ -122,6 +123,10 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       this.roomStories[roomId] = stories && stories.length ? stories : [];
     }
 
+    if (!this.roomCurrentStory[roomId]) {
+      this.roomCurrentStory[roomId] = 0;
+    }
+
     client.emit('userStoriesUpdate', this.roomStories[roomId]);
     
     if (!this.roomTimers[roomId]) {
@@ -137,6 +142,29 @@ export class PokerGateway implements OnGatewayInit, OnGatewayConnection, OnGatew
       startedAt: timer?.startedAt ?? null,
       serverTime: Date.now(),
     });
+  }
+
+  @SubscribeMessage('nextStory')
+  handleNextStory(client: Socket, payload: { roomId: string }) {
+    const { roomId } = payload;
+    if (!this.roomStories[roomId]) return;
+
+    if (this.roomCurrentStory[roomId] === undefined) {
+      this.roomCurrentStory[roomId] = 0;
+    } else {
+      this.roomCurrentStory[roomId] += 1;
+    }
+
+    if (this.rooms[roomId]) {
+      for (const user of Object.values(this.rooms[roomId])) {
+        user.vote = '';
+      }
+    }
+    this.roomRevealStates[roomId] = false;
+
+    this.server.to(roomId).emit('userStoriesUpdate', this.roomStories[roomId]);
+    this.server.to(roomId).emit('resetVotes');
+    this.server.to(roomId).emit('currentStoryUpdate', this.roomCurrentStory[roomId]);
   }
 
   @SubscribeMessage('vote')
